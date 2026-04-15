@@ -2,11 +2,42 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import os
 
 st.set_page_config(page_title="REDCap Auditor", page_icon="🔍", layout="wide")
 
+# Check for a logo file to display centered at the top
+logo_path = None
+if os.path.exists("logo.png"):
+    logo_path = "logo.png"
+elif os.path.exists("logo.jpg"):
+    logo_path = "logo.jpg"
+elif os.path.exists("logo.jpeg"):
+    logo_path = "logo.jpeg"
+
+if logo_path:
+    # Use columns to enforce center alignment
+    # Changing the ratio (e.g., [1, 1, 1] vs [1, 2, 1]) adjusts the logo size
+    lcol1, lcol2, lcol3 = st.columns([1, 1, 1])
+    with lcol2:
+        st.image(logo_path, use_container_width=True)
+
 st.title("REDCap Monthly Audit Comparison")
 st.write("Upload last month's Excel file and this month's CSV to compare changes.")
+
+with st.expander("📋 Instructions for Conducting the Audit", expanded=True):
+    st.markdown("""
+    **This Month's Data**
+    1. Log into REDCap and Navigate to the Control Center.
+    2. Scroll the submenu labelled "External Modules"
+    3. Click on "Admin Dashboard"
+    4. Click on "Users by Project"
+    5. Click on "Export: CSV" to download the current CSV file of REDCap Projects
+    6. Upload the file to "Upload This Month's Data"
+
+    <u>**Last Month's Data**</u><br>
+    1. Upload the CSV from the last month to the first upload field
+    """, unsafe_allow_html=True)
 
 col1, col2 = st.columns(2)
 
