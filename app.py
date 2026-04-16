@@ -151,6 +151,23 @@ if old_file and new_file:
                             status_dist.columns = ['Status', 'Count']
                             fig_bar = px.bar(status_dist, x='Status', y='Count', title='Project Status Overview', color='Status')
                             st.plotly_chart(fig_bar, use_container_width=True)
+                            
+                    if 'Total Records' in new_data.columns:
+                        tr_data = new_data.copy()
+                        tr_data['Total Records'] = pd.to_numeric(tr_data['Total Records'], errors='coerce')
+                        
+                        # Histogram
+                        fig_hist = px.histogram(tr_data, x="Total Records", nbins=50, title="Data Volume Distribution")
+                        st.plotly_chart(fig_hist, use_container_width=True)
+                        
+                        # Leaderboards
+                        with st.expander("🏆 Server Leaderboards (Top 15 Largest Projects)", expanded=False):
+                            # Exclude practice projects if purpose is mapped
+                            non_practice = tr_data[tr_data['Purpose'] != 'Practice/Just For Fun'] if 'Purpose' in tr_data.columns else tr_data
+                            top_15 = non_practice.sort_values(by='Total Records', ascending=False).head(15)
+                            disp_cols = [c for c in ['Project Title', 'Status', 'Total Records', 'Purpose', 'Usernames'] if c in top_15.columns]
+                            st.dataframe(top_15[disp_cols], use_container_width=True)
+                
                 except Exception as e:
                     st.warning(f"Could not render Executive Dashboard: {str(e)}")
 
@@ -416,6 +433,15 @@ if old_file and new_file:
                     
                     # Also include PID which is currently the index.
                     st.dataframe(audit_flags[display_cols], use_container_width=True)
+                    
+                    with st.expander("✉️ Generate Compliance Emails", expanded=False):
+                        st.write("Copy and paste these templates to reach out to the project owners:")
+                        for pid, row in audit_flags.iterrows():
+                            title = row.get('Project Title', f"Project {pid}")
+                            viol = row.get('Audit Flag', '')
+                            template = f"Subject: REDCap Auditing Alert - Action Required for '{title}'\n\nHello Team,\n\nOur automated server sweep flagged your project for the following compliance vulnerability:\n\n{viol}\n\nPlease review your project settings or contact administration to resolve this issue.\n\nThank you,\nREDCap Administration"
+                            st.code(template, language="markdown")
+                            
                     st.divider()
 
                 if len(deleted_pids) > 0:
@@ -437,6 +463,29 @@ if old_file and new_file:
                     st.info(f"Detected **{changes_count}** specific cell changes across all records.")
                 else:
                     st.info("No cell changes detected in the common records.")
+
+                # Sidebar User Investigator Integration
+                st.sidebar.title("🔍 User Investigator")
+                st.sidebar.write("Audit a specific researcher's portfolio.")
+                search_user = st.sidebar.text_input("Enter exact Username:")
+                if search_user:
+                    st.sidebar.write("---")
+                    if 'Usernames' in new_data.columns:
+                        mask = new_data['Usernames'].str.lower().fillna('').apply(lambda x: search_user.lower() in [u.strip().lower() for u in x.split(';')])
+                        user_df = new_data[mask]
+                        if user_df.empty:
+                            st.sidebar.warning(f"No projects found for '{search_user}'.")
+                        else:
+                            # Calculate metrics for the user
+                            total_user_records = pd.to_numeric(user_df.get('Total Records', pd.Series()), errors='coerce').sum()
+                            st.sidebar.success(f"Found **{len(user_df)}** projects.")
+                            st.sidebar.info(f"Managing **{int(total_user_records):,}** Total Records.")
+                            
+                            st.write(f"### 🔍 Investigator Profile: `{search_user}`")
+                            st.write(f"Displaying all {len(user_df)} projects currently mapped to this user footprint.")
+                            user_display_cols = [c for c in ['Project Title', 'Status', 'Total Records', 'Purpose', 'Usernames', 'Audit Flag'] if c in df_combined.columns]
+                            st.dataframe(df_combined.loc[user_df.index, user_display_cols], use_container_width=True)
+                            st.divider()
 
                 st.write("### Data Preview")
                 st.write("*(Highlights might not render perfectly in your web browser, but they will be fully visible in the downloaded Excel file.)*")
