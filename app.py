@@ -490,9 +490,23 @@ if old_file and new_file:
               title = row.get('Project Title', f"Project {pid}")
               viol = row.get('Audit Flag', '')
               
-              viol_formatted = "\n".join([f"- **{v.strip()}**" for v in str(viol).split('|') if v.strip()])
+              viol_formatted = ""
+              for v in str(viol).split('|'):
+                  v = v.strip()
+                  if not v: continue
+                  
+                  # Inject "Fix-It" help links based on the specific text of the violation
+                  link = ""
+                  if 'Dormant' in v or 'Stale' in v:
+                      link = " 🔗 *(Need help? Check our [Archival Guide Wiki](https://projectredcap.org/resources/))* "
+                  elif 'Suspended' in v or 'Orphan' in v:
+                      link = " 🔗 *(Need help? Check our [User Rights Manager Guide](https://projectredcap.org/resources/))* "
+                  elif 'Dev Mode' in v or 'Practice' in v or 'Stub' in v:
+                      link = " 🔗 *(Need help? Check our [Project Lifecycle Policies](https://projectredcap.org/resources/))* "
+                  
+                  viol_formatted += f"\n- **{v}**{link}"
               
-              template = f"**Subject:** REDCap Auditing Alert - Action Required for '{title}'\n\nHello Team,\n\nOur automated server sweep flagged your project for the following compliance vulnerability:\n\n{viol_formatted}\n\nPlease review your project settings or contact administration to resolve this issue.\n\nThank you,\n\nREDCap Administration"
+              template = f"**Subject:** REDCap Auditing Alert - Action Required for '{title}'\n\nHello Team,\n\nOur automated server sweep flagged your project for the following compliance vulnerability:\n{viol_formatted}\n\nPlease review your project settings or contact administration to resolve this issue.\n\nThank you,\n\nREDCap Administration"
               st.info(template)
               
           st.divider()
