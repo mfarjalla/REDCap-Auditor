@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import os
+import plotly.express as px
 
 st.set_page_config(page_title="REDCap Auditor", page_icon="🔍", layout="wide")
 
@@ -55,6 +56,18 @@ CODEBOOK = {
         1: 'Production Mode',
         '0': 'Developmental Mode',
         '1': 'Production Mode'
+    },
+    'Purpose': {
+        0: 'Practice/Just For Fun',
+        1: 'Other',
+        2: 'Research',
+        3: 'Quality Improvement',
+        4: 'Operational Support',
+        '0': 'Practice/Just For Fun',
+        '1': 'Other',
+        '2': 'Research',
+        '3': 'Quality Improvement',
+        '4': 'Operational Support'
     }
 }
 # -----------------------------------
@@ -103,6 +116,16 @@ if old_file and new_file:
                 new_pids = new_data.index.difference(old_data.index)
                 deleted_pids = old_data.index.difference(new_data.index)
                 
+                # Identify spam generators
+                spam_users_counts = {}
+                for pid in new_pids:
+                    users_str = str(new_data.loc[pid, 'Usernames']).strip() if 'Usernames' in new_data.columns else ''
+                    if users_str and users_str != 'nan':
+                        for u in users_str.split(';'):
+                            u = u.strip()
+                            if u:
+                                spam_users_counts[u] = spam_users_counts.get(u, 0) + 1
+                
                 st.success(f"Analysis Complete! Found {len(new_pids)} new records, {len(deleted_pids)} deleted records, and {len(common_pids)} existing records to compare.")
                 
                 # Show some metrics
@@ -111,6 +134,26 @@ if old_file and new_file:
                 m2.metric("Deleted Records", len(deleted_pids))
                 m3.metric("Compared Records", len(common_pids))
 
+                st.write("### Executive Dashboard")
+                try:
+                    col_chart1, col_chart2 = st.columns(2)
+                    
+                    with col_chart1:
+                        if 'Purpose' in new_data.columns:
+                            purpose_dist = new_data['Purpose'].value_counts().reset_index()
+                            purpose_dist.columns = ['Purpose', 'Count']
+                            fig_pie = px.pie(purpose_dist, values='Count', names='Purpose', title='Project Purpose Distribution', hole=0.4)
+                            st.plotly_chart(fig_pie, use_container_width=True)
+                            
+                    with col_chart2:
+                        if 'Status' in new_data.columns:
+                            status_dist = new_data['Status'].value_counts().reset_index()
+                            status_dist.columns = ['Status', 'Count']
+                            fig_bar = px.bar(status_dist, x='Status', y='Count', title='Project Status Overview', color='Status')
+                            st.plotly_chart(fig_bar, use_container_width=True)
+                except Exception as e:
+                    st.warning(f"Could not render Executive Dashboard: {str(e)}")
+
                 # We will output the new data with highlights
                 df_combined = new_data.copy()
                 df_combined['Audit Flag'] = ''
@@ -118,8 +161,11 @@ if old_file and new_file:
                 # Calculate changes count without side effects in styler
                 changes_count = 0
                 for pid in common_pids:
-                    # Check for Dev Mode flags
+                    flags = []
                     status_new = str(new_data.loc[pid, 'Status']).strip() if 'Status' in new_data.columns else ''
+                    purpose_new = str(new_data.loc[pid, 'Purpose']).strip() if 'Purpose' in new_data.columns else ''
+                    
+                    # 1. Dev Mode Data Collection
                     if status_new in ['Developmental Mode', '0', '0.0']:
                         if 'Total Records' in new_data.columns and 'Total Records' in old_data.columns:
                             val_old = old_data.loc[pid, 'Total Records']
@@ -127,10 +173,106 @@ if old_file and new_file:
                             if pd.notna(val_old) and pd.notna(val_new):
                                 try:
                                     if float(val_new) > float(val_old):
-                                        df_combined.loc[pid, 'Audit Flag'] = '⚠️ Data Collection in Dev Mode'
+                                        flags.append('⚠️ Dev Mode Collecting Data')
                                 except ValueError:
                                     pass
 
+                        if 'Creation Time' in new_data.columns:
+                            ctime = new_data.loc[pid, 'Creation Time']
+                            if pd.notna(ctime):
+                                try:
+                                    dt = pd.to_datetime(ctime)
+                                    if (pd.Timestamp.now() - dt).days > 730:
+                                        flags.append('⏳ Stale Dev Project (>2 yrs)')
+                                except Exception:
+                                    pass
+
+                    # 2. Extreme Growth
+                    if 'Total Records' in new_data.columns and 'Total Records' in old_data.columns:
+                        try:
+                            val_old = float(old_data.loc[pid, 'Total Records']) if pd.notna(old_data.loc[pid, 'Total Records']) else 0
+                            val_new = float(new_data.loc[pid, 'Total Records']) if pd.notna(new_data.loc[pid, 'Total Records']) else 0
+                            if (val_new - val_old) >= 1000:
+                                flags.append('📈 Extreme Growth (>1000 diff)')
+                        except ValueError:
+                            pass
+
+                    # 3. Dormant Project
+                    if 'Days Since Last Event' in new_data.columns:
+                        days = new_data.loc[pid, 'Days Since Last Event']
+                        if pd.notna(days):
+                            try:
+                                if float(days) > 180:
+                                    flags.append('🗑️ Dormant Project (>180 Days)')
+                            except ValueError:
+                                pass
+                                
+                    # 4. Practice Project Collecting Data
+                    if purpose_new in ['Practice/Just For Fun', '0', '0.0']:
+                        if 'Total Records' in new_data.columns:
+                            recs = new_data.loc[pid, 'Total Records']
+                            if pd.notna(recs):
+                                try:
+                                    if float(recs) > 5:
+                                        flags.append('🚨 Practice Project with >5 Records')
+                                except ValueError:
+                                    pass
+
+                    # 5. Orphaned Project
+                    users_str = str(new_data.loc[pid, 'Usernames']).strip() if 'Usernames' in new_data.columns else ''
+                    if users_str == '' or pd.isna(new_data.loc[pid, 'Usernames']) or users_str == 'nan':
+                        flags.append('👻 Orphaned Project (No Users)')
+                    else:
+                        if len(users_str.split(';')) >= 30:
+                            flags.append('👥 Massive Project (>=30 Users)')
+                        
+                    # 5.5 Suspended Users Check
+                    susp_col = 'user_suspended_time#group#hidden'
+                    if susp_col in new_data.columns:
+                        susp_str = str(new_data.loc[pid, susp_col]).strip()
+                        if susp_str != 'nan' and susp_str != '':
+                            susp_list = susp_str.split(';')
+                            susp_count = sum(1 for x in susp_list if x.strip() != '')
+                            if susp_count > 0:
+                                total_users = len(susp_list)
+                                if susp_count == total_users and total_users > 0:
+                                    flags.append('🚨 ALL Users Suspended (Orphan Risk)')
+                                else:
+                                    flags.append(f'⚠️ {susp_count} User(s) Suspended')
+
+                    # 6. Stub Production
+                    if status_new in ['Production Mode', '1', '1.0']:
+                        if 'Total Records' in new_data.columns:
+                            recs = new_data.loc[pid, 'Total Records']
+                            if pd.notna(recs):
+                                try:
+                                    if float(recs) == 0:
+                                        flags.append('🛑 Stub Prod (0 Records)')
+                                except ValueError:
+                                    pass
+
+                    # 7. User Changes
+                    if 'Usernames' in new_data.columns and 'Usernames' in old_data.columns:
+                        old_users_str = str(old_data.loc[pid, 'Usernames'])
+                        new_users_str = str(new_data.loc[pid, 'Usernames'])
+                        old_users_str = '' if old_users_str == 'nan' else old_users_str
+                        new_users_str = '' if new_users_str == 'nan' else new_users_str
+                        
+                        old_set = set([u.strip() for u in old_users_str.split(';') if u.strip()])
+                        new_set = set([u.strip() for u in new_users_str.split(';') if u.strip()])
+                        
+                        added = new_set - old_set
+                        removed = old_set - new_set
+                        
+                        if added:
+                            flags.append(f"👨‍💻 Added User(s): {', '.join(added)}")
+                        if removed:
+                            flags.append(f"❌ Removed User(s): {', '.join(removed)}")
+                            
+                    if flags:
+                        df_combined.loc[pid, 'Audit Flag'] = ' | '.join(flags)
+
+                    # Calculate generic cell changes
                     for col in new_data.columns:
                         if col in old_data.columns:
                             val_old = old_data.loc[pid, col]
@@ -141,17 +283,81 @@ if old_file and new_file:
                                 changes_count += 1
                 
                 for pid in new_pids:
-                    # Check for Dev Mode flags in completely new projects
+                    flags = []
                     status_new = str(new_data.loc[pid, 'Status']).strip() if 'Status' in new_data.columns else ''
+                    purpose_new = str(new_data.loc[pid, 'Purpose']).strip() if 'Purpose' in new_data.columns else ''
+                    
                     if status_new in ['Developmental Mode', '0', '0.0']:
                         if 'Total Records' in new_data.columns:
                             val_new = new_data.loc[pid, 'Total Records']
                             if pd.notna(val_new):
                                 try:
                                     if float(val_new) > 0:
-                                        df_combined.loc[pid, 'Audit Flag'] = '⚠️ Data Collection in Dev Mode'
+                                        flags.append('⚠️ Dev Mode Collecting Data')
                                 except ValueError:
                                     pass
+                                    
+                        if 'Creation Time' in new_data.columns:
+                            ctime = new_data.loc[pid, 'Creation Time']
+                            if pd.notna(ctime):
+                                try:
+                                    dt = pd.to_datetime(ctime)
+                                    if (pd.Timestamp.now() - dt).days > 730:
+                                        flags.append('⏳ Stale Dev Project (>2 yrs)')
+                                except Exception:
+                                    pass
+
+                    if 'Days Since Last Event' in new_data.columns:
+                        days = new_data.loc[pid, 'Days Since Last Event']
+                        if pd.notna(days):
+                            try:
+                                if float(days) > 180:
+                                    flags.append('🗑️ Dormant Project (>180 Days)')
+                            except ValueError:
+                                pass
+
+                    if purpose_new in ['Practice/Just For Fun', '0', '0.0']:
+                        if 'Total Records' in new_data.columns:
+                            recs = new_data.loc[pid, 'Total Records']
+                            if pd.notna(recs):
+                                try:
+                                    if float(recs) > 5:
+                                        flags.append('🚨 Practice Project with >5 Records')
+                                except ValueError:
+                                    pass
+
+                    users_str = str(new_data.loc[pid, 'Usernames']).strip() if 'Usernames' in new_data.columns else ''
+                    if users_str == '' or pd.isna(new_data.loc[pid, 'Usernames']) or users_str == 'nan':
+                        flags.append('👻 Orphaned Project (No Users)')
+                    else:
+                        if len(users_str.split(';')) >= 30:
+                            flags.append('👥 Massive Project (>=30 Users)')
+                        
+                    susp_col = 'user_suspended_time#group#hidden'
+                    if susp_col in new_data.columns:
+                        susp_str = str(new_data.loc[pid, susp_col]).strip()
+                        if susp_str != 'nan' and susp_str != '':
+                            susp_list = susp_str.split(';')
+                            susp_count = sum(1 for x in susp_list if x.strip() != '')
+                            if susp_count > 0:
+                                total_users = len(susp_list)
+                                if susp_count == total_users and total_users > 0:
+                                    flags.append('🚨 ALL Users Suspended (Orphan Risk)')
+                                else:
+                                    flags.append(f'⚠️ {susp_count} User(s) Suspended')
+
+                    if status_new in ['Production Mode', '1', '1.0']:
+                        if 'Total Records' in new_data.columns:
+                            recs = new_data.loc[pid, 'Total Records']
+                            if pd.notna(recs):
+                                try:
+                                    if float(recs) == 0:
+                                        flags.append('🛑 Stub Prod (0 Records)')
+                                except ValueError:
+                                    pass
+                                    
+                    if flags:
+                        df_combined.loc[pid, 'Audit Flag'] = ' | '.join(flags)
 
                 def highlight_diff(data):
                     # Initialize empty dataframe for styles (same shape as output)
@@ -200,10 +406,10 @@ if old_file and new_file:
                 # Check for any audit violations
                 audit_flags = df_combined[df_combined['Audit Flag'] != '']
                 if not audit_flags.empty:
-                    st.error(f"🚨 **High Priority**: Found {len(audit_flags)} project(s) in Development Mode with an increase in Total Records!")
+                    st.error(f"🚨 **High Priority**: Found {len(audit_flags)} project(s) with active Auditing Violations (Dormancy, User Changes, Dev Tracking, etc)!")
                     
-                    st.write("#### Dev Mode Violations")
-                    st.write("These projects are in Development Mode but show an increase in records since the last report. Please review.")
+                    st.write("#### Active Auditing Alert Flags")
+                    st.write("These projects correspond to high-priority REDCap server violations. Please review.")
                     
                     focus_cols = ['Project Title', 'Status', 'Total Records', 'Purpose', 'Usernames', 'Audit Flag']
                     display_cols = [col for col in focus_cols if col in audit_flags.columns]
@@ -211,6 +417,21 @@ if old_file and new_file:
                     # Also include PID which is currently the index.
                     st.dataframe(audit_flags[display_cols], use_container_width=True)
                     st.divider()
+
+                if len(deleted_pids) > 0:
+                    st.write("#### 🗃️ Deleted Projects Log")
+                    st.write("These projects existed last month but were fully completely deleted or purged this month.")
+                    del_cols = [c for c in ['Project Title', 'Status', 'Total Records', 'Purpose', 'Usernames'] if c in old_data.columns]
+                    st.dataframe(old_data.loc[deleted_pids, del_cols], use_container_width=True)
+                    st.divider()
+
+                if spam_users_counts:
+                    spam_df = pd.DataFrame(list(spam_users_counts.items()), columns=['Username', 'New Projects Created This Month'])
+                    spam_filtered = spam_df[spam_df['New Projects Created This Month'] >= 5].sort_values(by='New Projects Created This Month', ascending=False)
+                    if not spam_filtered.empty:
+                        st.warning("⚠️ **Spam/Training Alert**: The following users created 5 or more new projects this month. They may need training on longitudinal data collection.")
+                        st.dataframe(spam_filtered, use_container_width=True, hide_index=True)
+                        st.divider()
 
                 if changes_count > 0:
                     st.info(f"Detected **{changes_count}** specific cell changes across all records.")
