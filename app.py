@@ -280,14 +280,14 @@ if old_file and new_file:
                 else:
                   flags.append(f'{susp_count} User(s) Suspended')
 
-          # 6. Stub Production
+          # 6. Empty Production Project
           if status_new in ['Production Mode', '1', '1.0']:
             if 'Total Records'in new_data.columns:
               recs = new_data.loc[pid, 'Total Records']
               if pd.notna(recs):
                 try:
                   if float(recs) == 0:
-                    flags.append('Stub Prod (0 Records)')
+                    flags.append('Empty Production Project')
                 except ValueError:
                   pass
 
@@ -392,7 +392,7 @@ if old_file and new_file:
               if pd.notna(recs):
                 try:
                   if float(recs) == 0:
-                    flags.append('Stub Prod (0 Records)')
+                    flags.append('Empty Production Project')
                 except ValueError:
                   pass
                   
@@ -451,6 +451,24 @@ if old_file and new_file:
           st.write("#### Active Auditing Alert Flags")
           st.write("These projects correspond to high-priority REDCap server violations. Please review.")
           
+          try:
+              all_flags = []
+              for flag_str in audit_flags['Audit Flag']:
+                  flags = [f.strip() for f in str(flag_str).split('|') if f.strip()]
+                  all_flags.extend(flags)
+              
+              if all_flags:
+                  flag_counts = pd.Series(all_flags).value_counts().reset_index()
+                  flag_counts.columns = ['Violation Type', 'Count']
+                  
+                  fig_viol = px.bar(flag_counts, x='Count', y='Violation Type', orientation='h', 
+                                    title='Compliance Vulnerability Breakdown', color='Count',
+                                    color_continuous_scale='Reds')
+                  fig_viol.update_layout(yaxis={'categoryorder':'total ascending'})
+                  st.plotly_chart(fig_viol, use_container_width=True)
+          except Exception as e:
+              st.warning(f"Could not render Violations Chart: {str(e)}")
+          
           focus_cols = ['Project Title', 'Status', 'Total Records', 'Purpose', 'Usernames', 'Audit Flag']
           display_cols = [col for col in focus_cols if col in audit_flags.columns]
           
@@ -471,8 +489,11 @@ if old_file and new_file:
             for pid, row in audit_flags.iterrows():
               title = row.get('Project Title', f"Project {pid}")
               viol = row.get('Audit Flag', '')
-              template = f"Subject: REDCap Auditing Alert - Action Required for '{title}'\n\nHello Team,\n\nOur automated server sweep flagged your project for the following compliance vulnerability:\n\n{viol}\n\nPlease review your project settings or contact administration to resolve this issue.\n\nThank you,\nREDCap Administration"
-              st.code(template, language="markdown")
+              
+              viol_formatted = "\n".join([f"- **{v.strip()}**" for v in str(viol).split('|') if v.strip()])
+              
+              template = f"**Subject:** REDCap Auditing Alert - Action Required for '{title}'\n\nHello Team,\n\nOur automated server sweep flagged your project for the following compliance vulnerability:\n\n{viol_formatted}\n\nPlease review your project settings or contact administration to resolve this issue.\n\nThank you,\n\nREDCap Administration"
+              st.info(template)
               
           st.divider()
 
